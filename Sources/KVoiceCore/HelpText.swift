@@ -2,7 +2,7 @@ import Foundation
 
 public enum HelpText {
   public static let usage = """
-    KVoice — native macOS speech CLI
+    KVoice — macOS speech command-line application
 
     Usage:
       KVoice help --output <path.txt>
@@ -17,13 +17,13 @@ public enum HelpText {
     """
 
   public static let full = """
-    KVoice — AI-readable command reference
+    KVoice — complete command reference
     Version: 1.0.0
     Platform: macOS 26 or later
 
     PURPOSE
-    KVoice is a personal-use Swift command-line tool. It uses Apple's Speech framework for transcription,
-    Apple Foundation Models for text optimization, and AVFoundation for speech synthesis. Processing is local.
+    KVoice is a Swift command-line tool for speech transcription, text optimization, and speech synthesis.
+    It uses Apple's Speech, Foundation Models, and AVFoundation frameworks. Processing is local.
 
     PATH AND OUTPUT RULES
     - Every command requires --output, including help, version and list commands.
