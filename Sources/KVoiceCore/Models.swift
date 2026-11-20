@@ -7,7 +7,28 @@ public enum LanguageSelection: Equatable, Sendable {
 
 public enum TextInput: Equatable, Sendable {
   case file(URL)
+  case directory(URL)
+  case standardInput
   case inline(String)
+}
+
+public struct SpeechVoice: Equatable, Sendable {
+  public let identifier: String
+  public let name: String
+  public let languageIdentifier: String
+  public let quality: String
+
+  public init(identifier: String, name: String, languageIdentifier: String, quality: String) {
+    self.identifier = identifier
+    self.name = name
+    self.languageIdentifier = languageIdentifier
+    self.quality = quality
+  }
+}
+
+public enum ResourceList: Equatable, Sendable {
+  case languages
+  case voices
 }
 
 public enum OptimizationPurpose: String, Sendable {
@@ -95,7 +116,11 @@ public enum KVoiceCommand: Equatable, Sendable {
     force: Bool)
   case speak(
     input: TextInput, output: URL, language: LanguageSelection, optimize: Bool, force: Bool)
+  case speakConfigured(
+    input: TextInput, output: URL, language: LanguageSelection, optimize: Bool, force: Bool,
+    voiceName: String?, rate: Float?, sanitizeMarkdown: Bool)
   case locate(
     reference: URL, sourceText: URL?, audio: URL?, output: URL, language: LanguageSelection,
     optimize: Bool, force: Bool)
+  case listResources(kind: ResourceList, output: URL, force: Bool)
 }

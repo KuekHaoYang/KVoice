@@ -13,7 +13,10 @@ struct KVoiceCLI {
           transcriber: AppleSpeechTranscriber(),
           synthesizer: AppleSpeechSynthesizer()
         )
-        try await runner.run(command)
+        let outputs = try await runner.run(command)
+        for output in outputs {
+          FileHandle.standardOutput.write(Data("\(output.path)\n".utf8))
+        }
       } else {
         throw KVoiceError.modelUnavailable("KVoice requires macOS 26 or later.")
       }

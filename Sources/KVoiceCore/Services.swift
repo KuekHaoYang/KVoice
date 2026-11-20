@@ -16,10 +16,41 @@ public protocol SpeechRecognizing: Sendable {
 
 public protocol SpeechSynthesizing: Sendable {
   func availableLanguageIdentifiers() async -> [String]
+  func availableVoices() async -> [SpeechVoice]
   func synthesize(
     _ text: String,
     to outputURL: URL,
     languageIdentifier: String,
     replaceExisting: Bool
   ) async throws
+  func synthesize(
+    _ text: String,
+    to outputURL: URL,
+    languageIdentifier: String,
+    voiceIdentifier: String?,
+    rate: Float?,
+    replaceExisting: Bool
+  ) async throws
+}
+
+extension SpeechSynthesizing {
+  public func availableVoices() async -> [SpeechVoice] {
+    let languages = await availableLanguageIdentifiers()
+    return languages.map {
+      SpeechVoice(identifier: $0, name: $0, languageIdentifier: $0, quality: "unknown")
+    }
+  }
+
+  public func synthesize(
+    _ text: String,
+    to outputURL: URL,
+    languageIdentifier: String,
+    voiceIdentifier: String?,
+    rate: Float?,
+    replaceExisting: Bool
+  ) async throws {
+    try await synthesize(
+      text, to: outputURL, languageIdentifier: languageIdentifier,
+      replaceExisting: replaceExisting)
+  }
 }

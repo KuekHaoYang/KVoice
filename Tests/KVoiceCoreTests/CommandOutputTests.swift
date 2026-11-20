@@ -4,21 +4,24 @@ import XCTest
 @testable import KVoiceCore
 
 final class CommandOutputTests: XCTestCase {
-  func testOutputOverwriteRequiresForce() async throws {
+  func testOutputCollisionCreatesRepeatedCopiesWithoutForce() async throws {
     let folder = try makeFolder()
     let input = try makeFile(folder, name: "input.wav", text: "audio")
     let output = try makeFile(folder, name: "transcript.txt", text: "keep me")
     let runner = makeRunner()
 
-    do {
-      try await runner.run(
-        .transcribe(
-          input: input, output: output, language: .explicit("en-US"), timestamps: false,
-          optimize: false, force: false))
-      XCTFail("Expected existing output to be rejected")
-    } catch let error as KVoiceError {
-      XCTAssertEqual(error, .outputExists(output))
-    }
+    let command = KVoiceCommand.transcribe(
+      input: input, output: output, language: .explicit("en-US"), timestamps: false,
+      optimize: false, force: false)
+    let first = try await runner.run(command)
+    let firstCopy = folder.appendingPathComponent("transcript copy.txt")
+    XCTAssertEqual(first, [firstCopy])
+    XCTAssertEqual(try String(contentsOf: firstCopy, encoding: .utf8), "new\n")
+
+    let second = try await runner.run(command)
+    let secondCopy = folder.appendingPathComponent("transcript copy copy.txt")
+    XCTAssertEqual(second, [secondCopy])
+    XCTAssertEqual(try String(contentsOf: secondCopy, encoding: .utf8), "new\n")
     XCTAssertEqual(try String(contentsOf: output, encoding: .utf8), "keep me")
   }
 

@@ -4,34 +4,57 @@ public struct CommandRunner: Sendable {
   private let languageModel: any LanguageModeling
   private let transcriber: any SpeechRecognizing
   private let synthesizer: any SpeechSynthesizing
+  private let standardInputReader: @Sendable () throws -> String
 
   public init(
     languageModel: any LanguageModeling, transcriber: any SpeechRecognizing,
-    synthesizer: any SpeechSynthesizing
+    synthesizer: any SpeechSynthesizing,
+    standardInputReader: @escaping @Sendable () throws -> String = {
+      let data = FileHandle.standardInput.readDataToEndOfFile()
+      guard let text = String(data: data, encoding: .utf8) else {
+        throw KVoiceError.invalidText("Standard input must be valid UTF-8 text.")
+      }
+      return text
+    }
   ) {
     self.languageModel = languageModel
     self.transcriber = transcriber
     self.synthesizer = synthesizer
+    self.standardInputReader = standardInputReader
   }
 
-  public func run(_ command: KVoiceCommand) async throws {
+  @discardableResult
+  public func run(_ command: KVoiceCommand) async throws -> [URL] {
     switch command {
     case .help(let output, let force):
-      try write(Data(HelpText.full.utf8), to: output, force: force)
+      return [try write(Data(HelpText.full.utf8), to: output, force: force)]
     case .version(let output, let force):
-      try write(Data("KVoice 1.0.0\n".utf8), to: output, force: force)
+      return [try write(Data("KVoice 1.0.0\n".utf8), to: output, force: force)]
     case .transcribe(let input, let output, let language, let timestamps, let optimize, let force):
-      try await transcribe(
-        input: input, output: output, language: language, timestamps: timestamps,
-        optimize: optimize, force: force)
+      return [
+        try await transcribe(
+          input: input, output: output, language: language, timestamps: timestamps,
+          optimize: optimize, force: force)
+      ]
     case .speak(let input, let output, let language, let optimize, let force):
-      try await speak(
-        input: input, output: output, language: language, optimize: optimize, force: force)
+      return try await runSpeech(
+        input: input, output: output, language: language, optimize: optimize, force: force,
+        voiceName: nil, rate: nil, stripMarkdown: false)
+    case .speakConfigured(
+      let input, let output, let language, let optimize, let force, let voiceName, let rate,
+      let stripMarkdown):
+      return try await runSpeech(
+        input: input, output: output, language: language, optimize: optimize, force: force,
+        voiceName: voiceName, rate: rate, stripMarkdown: stripMarkdown)
     case .locate(
       let reference, let sourceText, let audio, let output, let language, let optimize, let force):
-      try await locate(
-        reference: reference, sourceText: sourceText, audio: audio, output: output,
-        language: language, optimize: optimize, force: force)
+      return [
+        try await locate(
+          reference: reference, sourceText: sourceText, audio: audio, output: output,
+          language: language, optimize: optimize, force: force)
+      ]
+    case .listResources(let kind, let output, let force):
+      return [try await listResources(kind: kind, output: output, force: force)]
     }
   }
 
@@ -42,10 +65,12 @@ public struct CommandRunner: Sendable {
     timestamps: Bool,
     optimize: Bool,
     force: Bool
-  ) async throws {
+  ) async throws -> URL {
     try FileValidation.validateInput(input)
     try FileValidation.requireDistinct(output, from: [input])
-    try FileValidation.validateOutput(output, force: force)
+    let destination = try FileValidation.uniqueOutputURL(output, force: force)
+    try FileValidation.requireDistinct(destination, from: [input])
+    try FileValidation.validateOutput(destination, force: force)
     let result = try await transcribeAudio(input, language: language, timestamps: timestamps)
     let rawText = try TextProcessing.normalizedNonEmpty(result.text)
     let finalText =
@@ -60,38 +85,49 @@ public struct CommandRunner: Sendable {
         optimizedTranscript: finalText,
         segments: result.segments
       )
-      try write(TextProcessing.encodeJSON(document), to: output, force: force)
+      return try write(TextProcessing.encodeJSON(document), to: destination, force: force)
     } else {
-      try write(Data((finalText + "\n").utf8), to: output, force: force)
+      return try write(Data((finalText + "\n").utf8), to: destination, force: force)
     }
   }
 
-  private func speak(
-    input: TextInput, output: URL, language: LanguageSelection, optimize: Bool, force: Bool
-  ) async throws {
-    try FileValidation.validateOutput(output, force: force)
-    let rawText: String
-    switch input {
-    case .file(let url):
-      try FileValidation.validateInput(url)
-      try FileValidation.requireDistinct(output, from: [url])
-      rawText = try String(contentsOf: url, encoding: .utf8)
-    case .inline(let text): rawText = text
+  private func runSpeech(
+    input: TextInput, output: URL, language: LanguageSelection, optimize: Bool, force: Bool,
+    voiceName: String?, rate: Float?, stripMarkdown: Bool
+  ) async throws -> [URL] {
+    if case .file(let url) = input { try FileValidation.validateInput(url) }
+    if case .directory(let url) = input { try FileValidation.validateInputDirectory(url) }
+    return try await SpeechOutputRunner(
+      languageModel: languageModel, synthesizer: synthesizer,
+      standardInputReader: standardInputReader
+    ).run(
+      input: input, output: output, language: language, optimize: optimize, force: force,
+      voiceName: voiceName, rate: rate, stripMarkdown: stripMarkdown)
+  }
+
+  private func listResources(kind: ResourceList, output: URL, force: Bool) async throws -> URL {
+    let contents: String
+    switch kind {
+    case .voices:
+      let voices = await synthesizer.availableVoices()
+      contents =
+        voices.map {
+          "\($0.name)\t\($0.languageIdentifier)\t\($0.quality)\t\($0.identifier)"
+        }.joined(separator: "\n") + (voices.isEmpty ? "" : "\n")
+    case .languages:
+      let speech = try await transcriber.installedLanguageIdentifiers()
+      let supportedSpeech = try await transcriber.supportedLanguageIdentifiers()
+      let voices = await synthesizer.availableVoices()
+      let synthesis = Array(Set(voices.map(\.languageIdentifier))).sorted()
+      contents =
+        "Speech recognition (installed):\n"
+        + speech.map { "  \($0)" }.joined(separator: "\n")
+        + "\n\nSpeech recognition (supported, may need download):\n"
+        + supportedSpeech.map { "  \($0)" }.joined(separator: "\n")
+        + "\n\nSpeech synthesis (installed voices):\n"
+        + synthesis.map { "  \($0)" }.joined(separator: "\n") + "\n"
     }
-    let text = try TextProcessing.normalizedNonEmpty(rawText)
-    let speechText = optimize ? try await languageModel.optimize(text, purpose: .speech) : text
-    _ = try TextProcessing.normalizedNonEmpty(speechText)
-    let available = await synthesizer.availableLanguageIdentifiers()
-    let languageIdentifier: String
-    switch language {
-    case .explicit(let requested):
-      languageIdentifier = try resolveLanguage(requested, among: available)
-    case .automatic:
-      let detected = try await languageModel.detectLanguage(in: speechText, candidates: available)
-      languageIdentifier = try resolveLanguage(detected, among: available)
-    }
-    try await synthesizer.synthesize(
-      speechText, to: output, languageIdentifier: languageIdentifier, replaceExisting: force)
+    return try write(Data(contents.utf8), to: output, force: force)
   }
 
   private func locate(
@@ -102,11 +138,14 @@ public struct CommandRunner: Sendable {
     language: LanguageSelection,
     optimize: Bool,
     force: Bool
-  ) async throws {
+  ) async throws -> URL {
     try FileValidation.validateInput(reference)
     try FileValidation.requireDistinct(
       output, from: [reference] + [sourceText, audio].compactMap { $0 })
-    try FileValidation.validateOutput(output, force: force)
+    let destination = try FileValidation.uniqueOutputURL(output, force: force)
+    try FileValidation.requireDistinct(
+      destination, from: [reference] + [sourceText, audio].compactMap { $0 })
+    try FileValidation.validateOutput(destination, force: force)
     let referenceText = try TextProcessing.normalizedNonEmpty(
       String(contentsOf: reference, encoding: .utf8))
     let originalSource: String
@@ -139,7 +178,7 @@ public struct CommandRunner: Sendable {
       language: resolvedLanguage,
       location: location
     )
-    try write(TextProcessing.encodeJSON(document), to: output, force: force)
+    return try write(TextProcessing.encodeJSON(document), to: destination, force: force)
   }
 
   private func transcribeAudio(_ input: URL, language: LanguageSelection, timestamps: Bool)
@@ -169,25 +208,7 @@ public struct CommandRunner: Sendable {
   }
 
   private func resolveLanguage(_ requested: String, among available: [String]) throws -> String {
-    let normalized = TextProcessing.normalizedLanguageTag(requested)
-    if let exact = available.first(where: {
-      TextProcessing.normalizedLanguageTag($0).caseInsensitiveCompare(normalized) == .orderedSame
-    }) {
-      return exact
-    }
-    guard !normalized.contains("-") else {
-      throw KVoiceError.unsupportedLanguage(requested)
-    }
-    let languageCode = Locale(identifier: normalized).language.languageCode?.identifier
-    if let languageCode,
-      let base = available.first(where: {
-        Locale(identifier: $0).language.languageCode?.identifier.caseInsensitiveCompare(
-          languageCode) == .orderedSame
-      })
-    {
-      return base
-    }
-    throw KVoiceError.unsupportedLanguage(requested)
+    try LanguageResolver.resolve(requested, among: available)
   }
 
   private func localeKey(_ identifier: String) -> String {
@@ -195,10 +216,7 @@ public struct CommandRunner: Sendable {
       ?? identifier.lowercased()
   }
 
-  private func write(_ data: Data, to output: URL, force: Bool) throws {
-    try FileValidation.validateOutput(output, force: force)
-    try FileManager.default.createDirectory(
-      at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try data.write(to: output, options: .atomic)
+  private func write(_ data: Data, to output: URL, force: Bool) throws -> URL {
+    try OutputFileWriter.write(data, to: output, force: force)
   }
 }

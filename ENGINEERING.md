@@ -32,8 +32,8 @@ These rules keep the personal CLI small, testable, and maintainable. New code mu
 
 ## Files and paths
 
-- All CLI input/output paths are absolute, validated, and passed as `URL` values.
-- Never overwrite a user file unless `--force` is explicit. Write generated text and JSON atomically.
+- Resolve relative CLI input/output paths against the current working directory, then validate and pass them as `URL` values.
+- Keep existing outputs by selecting a repeated `copy` filename suffix. `--force` explicitly opts into replacing the requested output. Write generated text and JSON atomically.
 - Validate output format and input readability before expensive model or audio work.
 - Encode JSON through one deterministic encoder configuration. Preserve raw and optimized text when an operation changes content.
 - Report only data Apple APIs provide. Do not invent timestamps, confidence scores, language tags, or match ranges.
@@ -48,6 +48,8 @@ These rules keep the personal CLI small, testable, and maintainable. New code mu
 
 ## Testing requirements
 
+- For every new feature or modification, update existing test files or add new ones as required to cover the changed behavior.
+- Once all code changes are complete, unconditionally run the full test suite without waiting for user approval. Include opt-in Apple integration tests by setting `KVOICE_RUN_SYSTEM_TESTS=1`; report any tests that cannot run because a system prerequisite is unavailable.
 - Add XCTest coverage for each command's required/optional arguments, output formats, path rules, defaults, and overwrite behavior.
 - Test orchestration through fake protocol implementations, including operation order, optimization bypass, automatic language retry, timestamps, output encoding, and errors.
 - Test pure text algorithms with Unicode, empty input, long text, and UTF-16 offset cases.

@@ -4,11 +4,15 @@ import XCTest
 @testable import KVoiceCore
 
 final class CommandLineTests: XCTestCase {
-  func testTranscribeRequiresAbsolutePathsAndTimestampExtension() throws {
-    XCTAssertThrowsError(
+  func testTranscribeAcceptsRelativePathsAndRequiresTimestampExtension() throws {
+    XCTAssertEqual(
       try KVoiceCommandLine.parse([
-        "transcribe", "--input", "relative.wav", "--output", "/tmp/result.txt",
-      ]))
+        "transcribe", "--input", "relative.wav", "--output", "relative-result.txt",
+      ]),
+      .transcribe(
+        input: FileValidation.resolvePath("relative.wav"),
+        output: FileValidation.resolvePath("relative-result.txt"),
+        language: .automatic, timestamps: false, optimize: true, force: false))
     XCTAssertThrowsError(
       try KVoiceCommandLine.parse([
         "transcribe", "--input", "/tmp/in.wav", "--output", "/tmp/result.txt", "--timestamps",
@@ -66,6 +70,56 @@ final class CommandLineTests: XCTestCase {
       ))
   }
 
+  func testSpeakParsesVoiceRateMarkdownAndStandardInputOptions() throws {
+    let output = FileValidation.resolvePath("relative.wav")
+    XCTAssertEqual(
+      try KVoiceCommandLine.parse([
+        "speak", "--text", "# Hello", "--output", "relative.wav", "--voice", "Samantha",
+        "--rate", "0.57", "--sanitize-markdown",
+      ]),
+      .speakConfigured(
+        input: .inline("# Hello"), output: output, language: .automatic, optimize: true,
+        force: false, voiceName: "Samantha", rate: 0.57, sanitizeMarkdown: true))
+
+    XCTAssertEqual(
+      try KVoiceCommandLine.parse(["speak", "--input", "-", "--output", "stdin.wav"]),
+      .speakConfigured(
+        input: .standardInput, output: FileValidation.resolvePath("stdin.wav"),
+        language: .automatic, optimize: true, force: false, voiceName: nil, rate: nil,
+        sanitizeMarkdown: false))
+    XCTAssertThrowsError(
+      try KVoiceCommandLine.parse([
+        "speak", "--text", "hello", "--output", "rate.wav", "--rate", "99",
+      ]))
+  }
+
+  func testSpeakDirectoryInputUsesAnOutputDirectory() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let input = folder.appendingPathComponent("input", isDirectory: true)
+    let output = folder.appendingPathComponent("output", isDirectory: true)
+    try FileManager.default.createDirectory(at: input, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    XCTAssertEqual(
+      try KVoiceCommandLine.parse([
+        "speak", "--input", input.path, "--output", output.path, "--no-optimize",
+      ]),
+      .speakConfigured(
+        input: .directory(input), output: FileValidation.resolvePath(output.path),
+        language: .automatic, optimize: false,
+        force: false, voiceName: nil, rate: nil, sanitizeMarkdown: false))
+  }
+
+  func testListCommandsParseLanguagesAndVoices() throws {
+    XCTAssertEqual(
+      try KVoiceCommandLine.parse(["list", "languages", "--output", "languages.txt"]),
+      .listResources(
+        kind: .languages, output: FileValidation.resolvePath("languages.txt"), force: false))
+    XCTAssertEqual(
+      try KVoiceCommandLine.parse(["list", "voices", "--output", "voices.txt"]),
+      .listResources(kind: .voices, output: FileValidation.resolvePath("voices.txt"), force: false))
+  }
+
   func testLocateRequiresSingleSourceAndJSONOutput() throws {
     XCTAssertThrowsError(
       try KVoiceCommandLine.parse([
@@ -101,7 +155,7 @@ final class CommandLineTests: XCTestCase {
       ]))
   }
 
-  func testHelpAndVersionRequireAbsoluteOutputPaths() throws {
+  func testHelpAndVersionAcceptRelativeOutputPaths() throws {
     XCTAssertEqual(
       try KVoiceCommandLine.parse(["help", "--output", "/tmp/help.txt"]),
       .help(output: URL(fileURLWithPath: "/tmp/help.txt"), force: false)
@@ -110,6 +164,8 @@ final class CommandLineTests: XCTestCase {
       try KVoiceCommandLine.parse(["version", "--output", "/tmp/version.txt", "--force"]),
       .version(output: URL(fileURLWithPath: "/tmp/version.txt"), force: true)
     )
-    XCTAssertThrowsError(try KVoiceCommandLine.parse(["help", "--output", "relative.txt"]))
+    XCTAssertEqual(
+      try KVoiceCommandLine.parse(["help", "--output", "relative.txt"]),
+      .help(output: FileValidation.resolvePath("relative.txt"), force: false))
   }
 }

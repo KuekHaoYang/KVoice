@@ -72,11 +72,23 @@ actor FakeTranscriber: SpeechRecognizing {
 
 actor FakeSynthesizer: SpeechSynthesizing {
   private let languages: [String]
+  private let voices: [SpeechVoice]
   private var language: String?
+  private var voiceIdentifier: String?
+  private var rate: Float?
+  private var speechText: String?
 
-  init(languages: [String] = ["en-US"]) { self.languages = languages }
+  init(languages: [String] = ["en-US"], voices: [SpeechVoice]? = nil) {
+    self.languages = languages
+    self.voices =
+      voices
+      ?? languages.map {
+        SpeechVoice(identifier: $0, name: $0, languageIdentifier: $0, quality: "unknown")
+      }
+  }
 
   func availableLanguageIdentifiers() async -> [String] { languages }
+  func availableVoices() async -> [SpeechVoice] { voices }
 
   func synthesize(
     _ text: String,
@@ -88,5 +100,23 @@ actor FakeSynthesizer: SpeechSynthesizing {
     try Data("audio:\(languageIdentifier):\(text)".utf8).write(to: outputURL)
   }
 
+  func synthesize(
+    _ text: String,
+    to outputURL: URL,
+    languageIdentifier: String,
+    voiceIdentifier: String?,
+    rate: Float?,
+    replaceExisting: Bool
+  ) async throws {
+    language = languageIdentifier
+    self.voiceIdentifier = voiceIdentifier
+    self.rate = rate
+    speechText = text
+    try Data("audio:\(languageIdentifier):\(text)".utf8).write(to: outputURL)
+  }
+
   func lastLanguage() -> String? { language }
+  func lastVoiceIdentifier() -> String? { voiceIdentifier }
+  func lastRate() -> Float? { rate }
+  func lastSpeechText() -> String? { speechText }
 }

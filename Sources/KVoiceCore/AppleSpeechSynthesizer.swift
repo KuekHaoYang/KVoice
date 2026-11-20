@@ -9,17 +9,65 @@ public struct AppleSpeechSynthesizer: SpeechSynthesizing {
     Array(Set(AVSpeechSynthesisVoice.speechVoices().map(\.language))).sorted()
   }
 
+  public func availableVoices() async -> [SpeechVoice] {
+    AVSpeechSynthesisVoice.speechVoices().map {
+      SpeechVoice(
+        identifier: $0.identifier, name: $0.name, languageIdentifier: $0.language,
+        quality: qualityName($0.quality))
+    }.sorted {
+      let comparison = $0.name.localizedCaseInsensitiveCompare($1.name)
+      return comparison == .orderedSame
+        ? $0.identifier < $1.identifier : comparison == .orderedAscending
+    }
+  }
+
+  private func qualityName(_ quality: AVSpeechSynthesisVoiceQuality) -> String {
+    switch quality {
+    case .default: return "default"
+    case .enhanced: return "enhanced"
+    case .premium: return "premium"
+    @unknown default: return "unknown"
+    }
+  }
+
   public func synthesize(
     _ text: String,
     to outputURL: URL,
     languageIdentifier: String,
     replaceExisting: Bool
   ) async throws {
+    try await synthesize(
+      text, to: outputURL, languageIdentifier: languageIdentifier, voiceIdentifier: nil,
+      rate: nil, replaceExisting: replaceExisting)
+  }
+
+  public func synthesize(
+    _ text: String,
+    to outputURL: URL,
+    languageIdentifier: String,
+    voiceIdentifier: String?,
+    rate: Float?,
+    replaceExisting: Bool
+  ) async throws {
     let value = try TextProcessing.normalizedNonEmpty(text)
     guard outputURL.pathExtension.lowercased() == "wav" else {
       throw KVoiceError.unsupportedOutput("Speech output must be a .wav file: \(outputURL.path)")
     }
-    guard let voice = AVSpeechSynthesisVoice(language: languageIdentifier) else {
+    if let rate,
+      !rate.isFinite || rate < AVSpeechUtteranceMinimumSpeechRate
+        || rate > AVSpeechUtteranceMaximumSpeechRate
+    {
+      throw KVoiceError.invalidSpeechRate(String(rate))
+    }
+    let voice: AVSpeechSynthesisVoice
+    if let voiceIdentifier {
+      guard let selected = AVSpeechSynthesisVoice(identifier: voiceIdentifier) else {
+        throw KVoiceError.unsupportedVoice(voiceIdentifier)
+      }
+      voice = selected
+    } else if let selected = AVSpeechSynthesisVoice(language: languageIdentifier) {
+      voice = selected
+    } else {
       throw KVoiceError.unsupportedLanguage(languageIdentifier)
     }
     try FileValidation.validateOutput(outputURL, force: replaceExisting)
@@ -31,6 +79,7 @@ public struct AppleSpeechSynthesizer: SpeechSynthesizing {
       ".\(outputURL.deletingPathExtension().lastPathComponent)-\(UUID().uuidString).wav")
     let utterance = AVSpeechUtterance(string: value)
     utterance.voice = voice
+    if let rate { utterance.rate = rate }
     let synthesizer = AVSpeechSynthesizer()
     let sink = AudioBufferSink(outputURL: temporaryURL, synthesizer: synthesizer)
     do {

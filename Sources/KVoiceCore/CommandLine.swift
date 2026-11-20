@@ -13,11 +13,11 @@ public enum KVoiceCommandLine {
       let (output, force) = try parseOutputOnly(Array(arguments.dropFirst()))
       return .version(output: output, force: force)
     }
-
     switch first {
     case "transcribe": return try parseTranscribe(Array(arguments.dropFirst()))
     case "speak": return try parseSpeak(Array(arguments.dropFirst()))
     case "locate": return try parseLocate(Array(arguments.dropFirst()))
+    case "list": return try parseList(Array(arguments.dropFirst()))
     default: throw KVoiceError.invalidArguments("Unknown command '\(first)'.\n\n\(HelpText.usage)")
     }
   }
@@ -48,22 +48,57 @@ public enum KVoiceCommandLine {
 
   private static func parseSpeak(_ arguments: [String]) throws -> KVoiceCommand {
     var options = try OptionValues(arguments)
-    let inputPath = try options.optionalPath("--input")
+    let inputValue = options.takeValue("--input")
     let inline = options.takeValue("--text")
-    guard (inputPath != nil) != (inline != nil) else {
+    guard (inputValue != nil) != (inline != nil) else {
       throw KVoiceError.invalidArguments(
-        "speak requires exactly one of --input <absolute-text-path> or --text <text>.")
+        "speak requires exactly one of --input <text-path|-> or --text <text>.")
     }
-    if let inputPath { try FileValidation.validateInput(inputPath) }
-    let input: TextInput = inputPath.map(TextInput.file) ?? .inline(inline ?? "")
+    let input = try parseTextInput(inputValue, inline: inline)
     let output = try options.requiredPath("--output")
     let language = try options.language()
     let optimize = !options.takeFlag("--no-optimize")
+    let voiceName = try options.nonEmptyValue("--voice")
+    let rate = try options.rate()
+    let sanitizeMarkdown = options.takeFlag("--sanitize-markdown")
+    let stripMarkdownAlias = options.takeFlag("--strip-markdown")
+    guard !(sanitizeMarkdown && stripMarkdownAlias) else {
+      throw KVoiceError.invalidArguments(
+        "Choose either --sanitize-markdown or its alias --strip-markdown, not both.")
+    }
+    let stripMarkdown = sanitizeMarkdown || stripMarkdownAlias
     let force = options.takeFlag("--force")
     try options.requireEmpty()
-    try validateOutput(output, extension: "wav")
-    return .speak(
-      input: input, output: output, language: language, optimize: optimize, force: force)
+    if case .directory(let inputDirectory) = input {
+      try FileValidation.validateOutputDirectory(output)
+      try FileValidation.requireDirectoryDistinct(output, from: inputDirectory)
+    } else {
+      try validateOutput(output, extension: "wav")
+    }
+    if voiceName == nil, rate == nil, !stripMarkdown {
+      switch input {
+      case .file, .inline:
+        return .speak(
+          input: input, output: output, language: language, optimize: optimize, force: force)
+      case .directory, .standardInput: break
+      }
+    }
+    return .speakConfigured(
+      input: input, output: output, language: language, optimize: optimize, force: force,
+      voiceName: voiceName, rate: rate, sanitizeMarkdown: stripMarkdown)
+  }
+
+  private static func parseTextInput(_ path: String?, inline: String?) throws -> TextInput {
+    guard let path else { return .inline(inline ?? "") }
+    guard !path.isEmpty else { throw KVoiceError.invalidPath(path) }
+    if path == "-" { return .standardInput }
+    let url = FileValidation.resolvePath(path)
+    if FileValidation.isDirectory(url) {
+      try FileValidation.validateInputDirectory(url)
+      return .directory(url)
+    }
+    try FileValidation.validateInput(url)
+    return .file(url)
   }
 
   private static func parseLocate(_ arguments: [String]) throws -> KVoiceCommand {
@@ -74,8 +109,7 @@ public enum KVoiceCommandLine {
     let audio = try options.optionalPath("--audio")
     guard (sourceText != nil) != (audio != nil) else {
       throw KVoiceError.invalidArguments(
-        "locate requires exactly one of --source-text <absolute-path> or --audio <absolute-audio-path>."
-      )
+        "locate requires exactly one of --source-text <path> or --audio <path>.")
     }
     if let sourceText { try FileValidation.validateInput(sourceText) }
     let output = try options.requiredPath("--output")
@@ -93,104 +127,28 @@ public enum KVoiceCommandLine {
       language: language, optimize: optimize, force: force)
   }
 
+  private static func parseList(_ arguments: [String]) throws -> KVoiceCommand {
+    guard let name = arguments.first else {
+      throw KVoiceError.invalidArguments("list requires one of: languages, voices.")
+    }
+    let kind: ResourceList
+    switch name {
+    case "languages": kind = .languages
+    case "voices": kind = .voices
+    default: throw KVoiceError.invalidArguments("Unknown resource list '\(name)'.")
+    }
+    var options = try OptionValues(Array(arguments.dropFirst()))
+    let output = try options.requiredPath("--output")
+    let force = options.takeFlag("--force")
+    try options.requireEmpty()
+    try FileValidation.validateOutput(output, force: force)
+    return .listResources(kind: kind, output: output, force: force)
+  }
+
   private static func validateOutput(_ url: URL, extension expected: String) throws {
     guard url.pathExtension.lowercased() == expected else {
       throw KVoiceError.unsupportedOutput("Output must use the .\(expected) extension: \(url.path)")
     }
-  }
-}
-
-private struct OptionValues {
-  private var values: [String: String] = [:]
-  private var flags: Set<String> = []
-
-  init(_ arguments: [String]) throws {
-    var index = 0
-    while index < arguments.count {
-      let option = arguments[index]
-      if ["--timestamps", "--no-optimize", "--force"].contains(option) {
-        guard !flags.contains(option) else {
-          throw KVoiceError.invalidArguments("Repeated option: \(option)")
-        }
-        flags.insert(option)
-        index += 1
-      } else if option.hasPrefix("--") {
-        guard index + 1 < arguments.count,
-          option == "--text" || !arguments[index + 1].hasPrefix("--")
-        else {
-          throw KVoiceError.invalidArguments("Missing value for \(option)")
-        }
-        guard values[option] == nil else {
-          throw KVoiceError.invalidArguments("Repeated option: \(option)")
-        }
-        values[option] = arguments[index + 1]
-        index += 2
-      } else {
-        throw KVoiceError.invalidArguments("Unexpected argument: \(option)")
-      }
-    }
-  }
-
-  mutating func requiredPath(_ option: String) throws -> URL {
-    guard let value = takeValue(option) else {
-      throw KVoiceError.invalidArguments("Missing required option \(option)")
-    }
-    let url = URL(fileURLWithPath: value)
-    guard value.hasPrefix("/"), url.isFileURL else { throw KVoiceError.invalidPath(value) }
-    return url.standardizedFileURL
-  }
-
-  mutating func optionalPath(_ option: String) throws -> URL? {
-    guard values[option] != nil else { return nil }
-    return try requiredPath(option)
-  }
-
-  mutating func language() throws -> LanguageSelection {
-    guard let value = takeValue("--language") else { return .automatic }
-    return value.lowercased() == "auto" ? .automatic : .explicit(value)
-  }
-
-  mutating func takeValue(_ option: String) -> String? { values.removeValue(forKey: option) }
-
-  mutating func takeFlag(_ option: String) -> Bool { flags.remove(option) != nil }
-
-  func requireEmpty() throws {
-    guard values.isEmpty, flags.isEmpty else {
-      let unknown = (Array(values.keys) + Array(flags)).sorted().joined(separator: ", ")
-      throw KVoiceError.invalidArguments("Unknown or unsupported option(s): \(unknown)")
-    }
-  }
-}
-
-public enum FileValidation {
-  public static func validateInput(_ url: URL) throws {
-    guard url.isFileURL, url.path.hasPrefix("/") else { throw KVoiceError.invalidPath(url.path) }
-    var isDirectory: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
-      !isDirectory.boolValue,
-      FileManager.default.isReadableFile(atPath: url.path)
-    else { throw KVoiceError.missingInput(url) }
-  }
-
-  public static func validateOutput(_ url: URL, force: Bool) throws {
-    guard url.isFileURL, url.path.hasPrefix("/") else { throw KVoiceError.invalidPath(url.path) }
-    var isDirectory: ObjCBool = false
-    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
-      guard !isDirectory.boolValue else {
-        throw KVoiceError.unsupportedOutput("Output must be a file, not a directory: \(url.path)")
-      }
-      if !force { throw KVoiceError.outputExists(url) }
-    }
-  }
-
-  public static func requireDistinct(_ output: URL, from inputs: [URL]) throws {
-    let resolvedOutput = output.standardizedFileURL.resolvingSymlinksInPath()
-    guard
-      !inputs.contains(where: { $0.standardizedFileURL.resolvingSymlinksInPath() == resolvedOutput }
-      )
-    else {
-      throw KVoiceError.invalidArguments(
-        "The output path must differ from every input path: \(output.path)")
-    }
+    try FileValidation.validateOutput(url, force: false)
   }
 }

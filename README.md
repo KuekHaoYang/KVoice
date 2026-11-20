@@ -76,13 +76,22 @@ Apple's `SpeechTranscriber` initializer requires a locale before it can recogniz
 
 ### Text to speech
 
-Read UTF-8 text from a file, optimize it, detect its language with Foundation Models, then synthesize WAV:
+Read UTF-8 text from a file, optimize it, detect its language with Foundation Models, then synthesize WAV. Paths may be relative to the current working directory:
 
 ```sh
 KVoice speak \
   --input /Users/haoyangkuek/Documents/note.txt \
   --output /Users/haoyangkuek/Audio/note.wav
 ```
+
+Sanitize Markdown before optimization and speech so headings, emphasis, list markers, links and code
+delimiters are not spoken. Link/image labels and fenced code contents are retained:
+
+```sh
+KVoice speak --input ./note.md --output ./note.wav --sanitize-markdown --no-optimize --language en-US
+```
+
+`--strip-markdown` is an alias for `--sanitize-markdown`.
 
 Or pass text directly as one shell argument:
 
@@ -94,6 +103,35 @@ KVoice speak \
 ```
 
 Use `--no-optimize` to synthesize source text unchanged. Automatic voice selection chooses from voices installed on the Mac. Explicit tags should use BCP-47, such as `en-US`, `zh-CN`, or `ms-MY`.
+
+Choose an installed voice by its displayed name and set Apple's utterance rate:
+
+```sh
+KVoice speak --input ./note.txt --output ./note.wav --voice Samantha --rate 0.57 --language en-US
+```
+
+`--rate` accepts values from `0.0` (minimum) through `1.0` (maximum); Apple currently defines `0.5` as
+the default. KVoice validates against Apple's `AVSpeechUtteranceMinimumSpeechRate` and
+`AVSpeechUtteranceMaximumSpeechRate` constants and leaves the system default in place when omitted.
+Apple documents the [voice catalog](https://developer.apple.com/documentation/avfaudio/avspeechsynthesisvoice/speechvoices()),
+[voice properties](https://developer.apple.com/documentation/avfaudio/avspeechsynthesisvoice/identifier),
+and [utterance rate constants](https://developer.apple.com/documentation/avfaudio/avspeechutterancemaximumspeechrate).
+Use `KVoice list voices --output ./voices.txt` to list installed voice names, identifiers, locales and quality.
+Use `KVoice list languages --output ./languages.txt` to list installed and supported Speech recognition
+locales plus languages available through installed synthesis voices.
+
+Read from a pipe with `--input -`:
+
+```sh
+cat ./note.md | KVoice speak --input - --output ./note.wav --sanitize-markdown --language en-US
+```
+
+Convert every regular file recursively in a directory by passing a directory to `--input` and an output
+directory to `--output`. Directory structure is preserved and output extensions become `.wav`:
+
+```sh
+KVoice speak --input ./notes --output ./audio --language en-GB --no-optimize
+```
 
 ### Locate source text in a reference
 
@@ -120,13 +158,14 @@ The JSON contains `originalSourceText`, `processedSourceText`, optional `languag
 
 ### Output behavior and options
 
-- Input and output paths must be absolute.
+- Absolute and current-directory-relative paths are accepted.
 - `transcribe` outputs `.txt`, or `.json` with `--timestamps`; `speak` outputs `.wav`; `locate` outputs `.json`.
 - Every invocation requires `--output`; use `help --output /absolute/path.txt` to save help.
-- Existing output files are protected. Use `--force` to replace them.
+- Existing output files are preserved by creating `name copy.ext`, then `name copy copy.ext`, and so on.
+  Use `--force` to replace the requested output instead.
 - `--no-optimize` disables text correction only. Automatic language selection still uses Foundation Models.
 - `locate --source-text` searches the supplied text as-is; `--no-optimize` affects only audio transcripts.
-- Results go only to the output file. Errors go to stderr and return a nonzero exit code.
+- Artifacts are written to the output path; the resulting path is printed to stdout. Errors go to stderr and return a nonzero exit code.
 - If Foundation Models is unavailable, default optimization and automatic language selection fail with an actionable error. Use `--no-optimize` with explicit `--language` to avoid Foundation Models for transcription or synthesis.
 
 ## Architecture
